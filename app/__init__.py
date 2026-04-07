@@ -1,4 +1,11 @@
 # app package initializer
-from app.core.config import settings
+from pymongo import MongoClient
+from .core.config import settings
 
-__all__ = ["settings"]
+# Initialize MongoDB clientclie
+client = MongoClient(settings.mongo_uri)
+db =  client[settings.mongo_db]
+
+#collections
+jobs_collection = db['jobs']
+schedules_collection = db['schedules']
