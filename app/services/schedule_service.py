@@ -1,3 +1,6 @@
+from typing import Any
+
+from app.models.extraction import ExtractedConstraints
 from app.services.graph_service import GraphService
 from app.services.coloring_service import ColoringService
 from app.services.normalization_service import NormalizationService
@@ -9,7 +12,26 @@ class ScheduleService:
         self.coloring_service = ColoringService()
         self.normalizer = NormalizationService()
 
-    def build_schedule(self, constraints: list[str]) -> dict[str, dict[str, str]]:
-        normalized = self.normalizer.normalize({f"constraint_{i}": value for i, value in enumerate(constraints)})
-        graph = self.graph_service.build_graph(list(normalized.values()))
+    def build_schedule(self, constraints: dict[str, Any]) -> dict[str, Any]:
+        extracted = ExtractedConstraints.model_validate(constraints)
+        normalized = self.normalizer.normalize(extracted)
+
+        graph_items = []
+        graph_items.extend(
+            f'employee:{employee["name"]}' for employee in normalized["entities"]["employees"]
+        )
+        graph_items.extend(
+            f'shift:{shift["id"]}:{shift["day"]}_{shift["time"]}'
+            for shift in normalized["entities"]["shifts"]
+        )
+        graph_items.extend(
+            f'hard_constraint:{constraint}'
+            for constraint in normalized["constraints"]["hard_constraints"]
+        )
+        graph_items.extend(
+            f'soft_constraint:{constraint}'
+            for constraint in normalized["constraints"]["soft_constraints"]
+        )
+
+        graph = self.graph_service.build_graph(graph_items)
         return self.coloring_service.color_graph(graph)

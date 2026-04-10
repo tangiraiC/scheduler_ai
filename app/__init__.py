@@ -1,11 +1,13 @@
-# app package initializer
-from pymongo import MongoClient
 from .core.config import settings
 
-# Initialize MongoDB clientclie
-client = MongoClient(settings.mongo_uri)
-db =  client[settings.mongo_db]
+try:
+    from pymongo import MongoClient
+except ModuleNotFoundError:
+    MongoClient = None
 
-#collections
-jobs_collection = db['jobs']
-schedules_collection = db['schedules']
+
+client = MongoClient(settings.mongo_uri) if MongoClient else None
+db = client[settings.mongo_db_name] if client else None
+
+jobs_collection = db["jobs"] if db is not None else None
+schedules_collection = db["schedules"] if db is not None else None

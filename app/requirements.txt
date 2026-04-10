@@ -2,7 +2,8 @@ fastapi
 uvicorn[standard]
 pydantic
 pydantic-settings
-sqlalchemy
+pymongo
 python-dotenv
+requests
 pytest
 httpx

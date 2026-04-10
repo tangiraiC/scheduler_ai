@@ -1,15 +1,13 @@
-from sqlalchemy.orm import Session
+from typing import Any
 
-from app.models.db_models import Schedule
+from app.models.db_models import ScheduleDocument
 
 
 class ScheduleRepository:
-    def __init__(self, db: Session) -> None:
-        self.db = db
+    def __init__(self, collection: Any) -> None:
+        self.collection = collection
 
-    def create_schedule(self, name: str, data: str) -> Schedule:
-        schedule = Schedule(name=name, data=data)
-        self.db.add(schedule)
-        self.db.commit()
-        self.db.refresh(schedule)
+    def create_schedule(self, schedule: ScheduleDocument) -> ScheduleDocument:
+        if self.collection is not None:
+            self.collection.insert_one(schedule.model_dump(mode="json"))
         return schedule
