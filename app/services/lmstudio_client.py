@@ -35,7 +35,7 @@ class LMStudioClient:
         self,
         system_prompt: str,
         user_prompt: str,
-        temperature: float = 0.0,
+        temperature: float = 0.01,
         max_tokens: int = 1200,
     ) -> str:
         payload = {
