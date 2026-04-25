@@ -5,7 +5,11 @@ from app.main import app
 client = TestClient(app)
 
 
-def test_schedule_endpoint() -> None:
+def test_schedule_endpoint(monkeypatch) -> None:
+    from app.api.v1.endpoints.schedule import job_service
+
+    monkeypatch.setattr(job_service, "create_job", lambda _payload: "job_test")
+
     payload = {
         "constraints": {
             "job_type": "workforce_schedule",
@@ -39,5 +43,8 @@ def test_schedule_endpoint() -> None:
     }
     response = client.post("/api/v1/schedule", json=payload)
     assert response.status_code == 200
-    assert response.json()["status"] == "scheduled"
-    assert "nodes" in response.json()["schedule"]
+    body = response.json()
+    assert body["status"] == "success"
+    assert body["is_valid"] is True
+    assert "nodes" in body["schedule_result"]
+    assert "job_id" in body

@@ -6,7 +6,9 @@ client = TestClient(app)
 
 
 def test_parse_endpoint(monkeypatch) -> None:
-    async def fake_extract(self, raw_text: str):
+    from app.api.v1.endpoints.parse import extraction_service
+
+    async def fake_extract(raw_text: str):
         return {
             "success": True,
             "attempt": 1,
@@ -17,10 +19,10 @@ def test_parse_endpoint(monkeypatch) -> None:
             },
         }
 
-    monkeypatch.setattr("app.api.v1.endpoints.parse.ExtractionService.extract", fake_extract)
+    monkeypatch.setattr(extraction_service, "extract", fake_extract)
 
     payload = {"raw_text": "Schedule a meeting for tomorrow."}
     response = client.post("/api/v1/parse", json=payload)
     assert response.status_code == 200
-    assert response.json()["status"] == "parsed"
-    assert response.json()["extracted_constraints"]["job_type"] == "workforce_schedule"
+    assert response.json()["status"] == "success"
+    assert response.json()["extracted_data"]["job_type"] == "workforce_schedule"

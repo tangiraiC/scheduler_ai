@@ -32,10 +32,10 @@ class NormalizationService:
         "sunday": "sunday",
     }
 
-    VALID_TIMES = {
+    VALID_SHIFT_LABELS = {
         "morning": "morning",
         "am": "morning",
-        "day": "morning",
+        "day": "day",
         "afternoon": "afternoon",
         "pm": "afternoon",
         "evening": "evening",
@@ -45,6 +45,13 @@ class NormalizationService:
 
     def normalize(self, extracted: ExtractedConstraints) -> dict[str, Any]:
         data = extracted.model_dump()
+
+        data.setdefault("entities", {})
+        data.setdefault("constraints", {})
+        data["entities"].setdefault("employees", [])
+        data["entities"].setdefault("shifts", [])
+        data["constraints"].setdefault("hard_constraints", [])
+        data["constraints"].setdefault("soft_constraints", [])
 
         data["entities"]["employees"] = self._normalize_employees(
             data["entities"].get("employees", [])
@@ -57,7 +64,6 @@ class NormalizationService:
         )
 
         self._validate_consistency(data)
-
         return data
 
     def _normalize_employees(self, employees: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -80,12 +86,7 @@ class NormalizationService:
                 [self._normalize_person_name(n) for n in employee.get("cannot_work_with", []) if n]
             )
 
-            max_shifts = employee.get("max_shifts_per_week")
-            if max_shifts is not None:
-                try:
-                    max_shifts = int(max_shifts)
-                except (TypeError, ValueError):
-                    max_shifts = None
+            max_shifts = self._safe_int_or_none(employee.get("max_shifts_per_week"))
 
             normalized = {
                 "name": name,
@@ -95,7 +96,7 @@ class NormalizationService:
                 "cannot_work_with": cannot_work_with,
             }
 
-            key = name.lower()
+            key = name.casefold()
             if key not in merged:
                 merged[key] = normalized
             else:
@@ -116,12 +117,15 @@ class NormalizationService:
         return list(merged.values())
 
     def _normalize_shifts(self, shifts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        merged: dict[tuple[str, str, str], dict[str, Any]] = {}
+        merged: dict[tuple[Any, ...], dict[str, Any]] = {}
         generated_id_counter = 1
 
         for shift in shifts:
             day = self._normalize_day(shift.get("day"))
-            time = self._normalize_time(shift.get("time"))
+            time = self._normalize_time_range(shift.get("time"))
+            shift_label = self._normalize_shift_label(shift.get("shift_label"))
+            if not shift_label and self._normalize_text(shift.get("time")) in self.VALID_SHIFT_LABELS:
+                shift_label = self._normalize_shift_label(shift.get("time"))
             location = self._normalize_text(shift.get("location"))
 
             required_skills = self._dedupe_list(
@@ -129,19 +133,26 @@ class NormalizationService:
             )
 
             min_staff = self._safe_int(shift.get("min_staff"), default=1)
-            max_staff = self._safe_int(shift.get("max_staff"), default=1)
+            max_staff = self._safe_int(shift.get("max_staff"), default=max(min_staff, 1))
 
             shift_id = self._normalize_text(shift.get("id"))
             if not shift_id:
                 shift_id = f"shift_{generated_id_counter}"
                 generated_id_counter += 1
 
-            key = (day, time, location or "")
+            key = (
+                day,
+                time,
+                shift_label,
+                location or "",
+                tuple(sorted(required_skills)),
+            )
 
             normalized = {
                 "id": shift_id,
                 "day": day,
                 "time": time,
+                "shift_label": shift_label,
                 "location": location,
                 "required_skills": required_skills,
                 "min_staff": min_staff,
@@ -157,7 +168,11 @@ class NormalizationService:
                 merged[key]["min_staff"] = max(merged[key]["min_staff"], min_staff)
                 merged[key]["max_staff"] = max(merged[key]["max_staff"], max_staff)
 
-        return list(merged.values())
+        deduped = list(merged.values())
+        for i, shift in enumerate(deduped, start=1):
+            shift["id"] = f"shift_{i}"
+
+        return deduped
 
     def _normalize_constraints(self, constraints: dict[str, Any]) -> dict[str, list[str]]:
         hard = self._dedupe_list(
@@ -176,13 +191,19 @@ class NormalizationService:
         employees = data["entities"]["employees"]
         shifts = data["entities"]["shifts"]
 
-        valid_availability_labels = {"morning", "afternoon", "evening", "night"}
+        valid_days = set(self.VALID_DAYS.values())
+        valid_shift_labels = {"morning", "day", "afternoon", "evening", "night"}
 
         employee_names = {e["name"] for e in employees}
 
         for employee in employees:
             if not employee["name"]:
                 raise NormalizationError("Employee name cannot be empty.")
+
+            if employee["max_shifts_per_week"] is not None and employee["max_shifts_per_week"] < 0:
+                raise NormalizationError(
+                    f'Employee "{employee["name"]}" has invalid max_shifts_per_week.'
+                )
 
             for person in employee["cannot_work_with"]:
                 if person == employee["name"]:
@@ -191,22 +212,30 @@ class NormalizationService:
                     )
 
             for slot in employee["availability"]:
-                # expected format like monday_morning
                 parts = slot.split("_")
                 if len(parts) < 2:
+                    if slot in valid_days:
+                        continue
+                    if slot in valid_shift_labels:
+                        continue
+                    if re.fullmatch(r"\d{1,2}:\d{2}-\d{1,2}:\d{2}", slot):
+                        continue
+                        
                     raise NormalizationError(
                         f'Invalid availability format "{slot}" for employee "{employee["name"]}".'
                     )
                 day = parts[0]
                 shift = "_".join(parts[1:])
-                if day not in set(self.VALID_DAYS.values()):
+                if day not in valid_days:
                     raise NormalizationError(
                         f'Invalid day "{day}" in availability "{slot}" for employee "{employee["name"]}".'
                     )
-                if shift not in valid_availability_labels:
-                    raise NormalizationError(
-                        f'Invalid shift "{shift}" in availability "{slot}" for employee "{employee["name"]}".'
-                    )
+                if shift not in valid_shift_labels:
+                    # Allow time ranges like "09:00-13:00"
+                    if not re.fullmatch(r"\d{1,2}:\d{2}-\d{1,2}:\d{2}", shift):
+                        raise NormalizationError(
+                            f'Invalid shift "{shift}" in availability "{slot}" for employee "{employee["name"]}".'
+                        )
 
         seen_shift_ids: set[str] = set()
         for shift in shifts:
@@ -216,12 +245,22 @@ class NormalizationService:
                 raise NormalizationError(f'Duplicate shift id found: "{shift["id"]}".')
             seen_shift_ids.add(shift["id"])
 
-            if shift["day"] not in set(self.VALID_DAYS.values()):
+            if shift["day"] not in valid_days:
                 raise NormalizationError(f'Invalid shift day "{shift["day"]}".')
-            if shift["time"] not in set(self.VALID_TIMES.values()):
-                raise NormalizationError(f'Invalid shift time "{shift["time"]}".')
+
+            if not shift["time"] and not shift["shift_label"]:
+                raise NormalizationError(
+                    f'Shift "{shift["id"]}" must have at least a time or shift_label.'
+                )
+
+            if shift["shift_label"] and shift["shift_label"] not in valid_shift_labels:
+                raise NormalizationError(
+                    f'Invalid shift label "{shift["shift_label"]}" for shift "{shift["id"]}".'
+                )
+
             if shift["min_staff"] < 1:
                 raise NormalizationError(f'Shift "{shift["id"]}" min_staff must be at least 1.')
+
             if shift["max_staff"] < shift["min_staff"]:
                 raise NormalizationError(
                     f'Shift "{shift["id"]}" has max_staff < min_staff.'
@@ -230,7 +269,6 @@ class NormalizationService:
         for employee in employees:
             for person in employee["cannot_work_with"]:
                 if person not in employee_names:
-                    # not fatal, but strict validation helps
                     raise NormalizationError(
                         f'Employee "{employee["name"]}" references unknown person "{person}" in cannot_work_with.'
                     )
@@ -241,11 +279,11 @@ class NormalizationService:
             return ""
         return self.VALID_DAYS.get(text, text)
 
-    def _normalize_time(self, value: Any) -> str:
+    def _normalize_shift_label(self, value: Any) -> str:
         text = self._normalize_text(value)
         if not text:
             return ""
-        return self.VALID_TIMES.get(text, text)
+        return self.VALID_SHIFT_LABELS.get(text, text)
 
     def _normalize_skill(self, value: Any) -> str:
         text = self._normalize_text(value)
@@ -270,14 +308,35 @@ class NormalizationService:
         if not text:
             return ""
 
-        text = text.replace("-", " ").replace("_", " ")
+        # Normalize time ranges specifically before splitting
+        text = text.replace(" to ", "-").replace("–", "-").replace("—", "-")
+        # Ensure there are no spaces around dashes so they stay together
+        text = re.sub(r"\s*-\s*", "-", text)
+        
+        text = text.replace("_", " ")
         parts = text.split()
 
         if len(parts) >= 2:
             day = self._normalize_day(parts[0])
-            time = self._normalize_time(parts[1])
-            return f"{day}_{time}"
+            # The remaining part could be a shift label or time range
+            shift = self._normalize_shift_label(parts[1])
+            if not shift and parts[1]:
+                shift = parts[1] # fallback to the literal time range
+            return f"{day}_{shift}"
 
+        return text
+
+    def _normalize_time_range(self, value: Any) -> str:
+        text = self._normalize_text(value)
+        if not text:
+            return ""
+
+        symbolic = self.VALID_SHIFT_LABELS.get(text)
+        if symbolic:
+            return symbolic
+
+        text = text.replace(" to ", "-").replace("–", "-").replace("—", "-")
+        text = re.sub(r"\s+", "", text)
         return text
 
     def _normalize_text(self, value: Any) -> str:
@@ -291,13 +350,18 @@ class NormalizationService:
         except (TypeError, ValueError):
             return default
 
+    def _safe_int_or_none(self, value: Any) -> int | None:
+        try:
+            val = int(value)
+            return val if val > 0 else None
+        except (TypeError, ValueError):
+            return None
+
     def _dedupe_list(self, items: list[str]) -> list[str]:
         seen: set[str] = set()
         result: list[str] = []
-
         for item in items:
             if item and item not in seen:
                 seen.add(item)
                 result.append(item)
-
         return result

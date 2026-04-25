@@ -1,15 +1,25 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
-from app import jobs_collection
-from app.models.db_models import JobDocument
-from app.models.response_models import JobListResponse
-from app.repositories.jobs_repository import JobRepository
+from app.schemas.job import JobResponse
+from app.services.job_service import JobNotFoundError, JobService
 
 router = APIRouter()
+job_service = JobService()
 
 
-@router.get("", response_model=JobListResponse)
-async def list_jobs() -> JobListResponse:
-    repo = JobRepository(jobs_collection)
-    jobs = repo.list_jobs()
-    return JobListResponse(jobs=jobs)
+@router.get("/{job_id}", response_model=JobResponse)
+async def get_job(job_id: str) -> JobResponse:
+    try:
+        job = job_service.get_job(job_id)
+        return JobResponse(
+            status="success",
+            job_id=job_id,
+            job=job,
+        )
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected job lookup failure: {exc}",
+        ) from exc

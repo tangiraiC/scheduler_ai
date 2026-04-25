@@ -15,13 +15,14 @@ class LMStudioClient:
         self,
         base_url: Optional[str] = None,
         model_name: Optional[str] = None,
-        timeout: int = 60,
+        timeout: int = 300,
     ) -> None:
         self.base_url = (base_url or settings.lmstudio_api_url).rstrip("/")
+        self.api_url = self.base_url if self.base_url.endswith("/v1") else f"{self.base_url}/v1"
         self.model_name = model_name or settings.lmstudio_model_name
         self.timeout = timeout
-        self.chat_url = f"{self.base_url}/v1/chat/completions"
-        self.models_url = f"{self.base_url}/v1/models"
+        self.chat_url = f"{self.api_url}/chat/completions"
+        self.models_url = f"{self.api_url}/models"
 
     def health_check(self) -> Dict[str, Any]:
         try:
@@ -31,20 +32,36 @@ class LMStudioClient:
         except requests.RequestException as exc:
             raise LMStudioClientError(f"LM Studio health check failed: {exc}") from exc
 
+    def list_models(self) -> list[str]:
+        try:
+            response = requests.get(self.models_url, timeout=10)
+            response.raise_for_status()
+            payload = response.json()
+            return [item["id"] for item in payload.get("data", [])]
+        except requests.RequestException as exc:
+            raise LMStudioClientError(f"LM Studio models request failed: {exc}") from exc
+        except (KeyError, TypeError, ValueError) as exc:
+            raise LMStudioClientError("LM Studio returned invalid models response") from exc
+
     def generate(
         self,
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.01,
-        max_tokens: int = 1200,
+        max_tokens: int = 8000,
     ) -> str:
         payload = {
             "model": self.model_name,
             "temperature": temperature,
             "max_tokens": max_tokens,
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {
+                    "role": "user",
+                    "content": (
+                        f"System instructions:\n{system_prompt}\n\n"
+                        f"User request:\n{user_prompt}"
+                    ),
+                },
             ],
         }
 
@@ -77,7 +94,7 @@ class LMStudioClient:
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.0,
-        max_tokens: int = 1200,
+        max_tokens: int = 8000,
     ) -> Dict[str, Any]:
         content = self.generate(
             system_prompt=system_prompt,

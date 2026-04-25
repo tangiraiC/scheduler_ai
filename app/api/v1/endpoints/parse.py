@@ -1,36 +1,33 @@
-from uuid import uuid4
+from __future__ import annotations
 
-from fastapi import APIRouter
+import inspect
 
-from app import jobs_collection
-from app.models.db_models import JobDocument, JobStatus
-from app.models.request_models import ParseRequest
-from app.models.response_models import ParseResponse
-from app.services.extraction_service import ExtractionService
+from fastapi import APIRouter, HTTPException
+
+from app.schemas.parse import ParseRequest, ParseResponse
+from app.services.extraction_service import ExtractionService, ExtractionServiceError
 
 router = APIRouter()
+extraction_service = ExtractionService()
 
 
 @router.post("", response_model=ParseResponse)
 async def parse_text(payload: ParseRequest) -> ParseResponse:
-    extractor = ExtractionService()
-    extraction_result = await extractor.extract(payload.raw_text)
+    try:
+        extraction_result = extraction_service.extract(payload.raw_text)
+        if inspect.isawaitable(extraction_result):
+            extraction_result = await extraction_result
 
-    job = JobDocument(
-        job_id=str(uuid4()),
-        domain=payload.domain,
-        raw_text=payload.raw_text,
-        extracted_constraints=extraction_result["data"],
-        status=JobStatus.PARSED,
-        warnings=[],
-    )
-    if jobs_collection is not None:
-        jobs_collection.insert_one(job.model_dump(mode="json"))
+        extracted_data = extraction_result.get("data", extraction_result)
 
-    return ParseResponse(
-        job_id=job.job_id,
-        status=job.status,
-        extracted_constraints=extraction_result["data"],
-        normalization_notes=[],
-        warnings=[],
-    )
+        return ParseResponse(
+            status="success",
+            extracted_data=extracted_data,
+        )
+    except ExtractionServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected parse failure: {exc}",
+        ) from exc

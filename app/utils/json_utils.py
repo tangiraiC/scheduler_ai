@@ -47,8 +47,9 @@ STRICT RULES:
 
 NORMALIZATION RULES:
 - Days -> lowercase (monday, tuesday, ...)
-- Times -> simple labels (morning, afternoon, evening, night)
+- Times -> preserve explicit time ranges when present, e.g. "09:00-13:00"; otherwise use simple labels (morning, afternoon, evening, night)
 - Skills -> lowercase with underscores instead of spaces (e.g., "front_desk", "system_cert_a")
+- Locations -> preserve apartment/building names from shift sentences, e.g. "apt_a", "apt_b"
 
 IF NO SCHEDULING INFORMATION IS FOUND, RETURN:
 {{

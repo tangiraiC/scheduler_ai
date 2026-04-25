@@ -1,4 +1,7 @@
-from app import db
+from app.db.mongo import get_database
 
 def get_db():
-    return db
+    return get_database()
+
+
+db = get_database()

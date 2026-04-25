@@ -7,3 +7,4 @@ python-dotenv
 requests
 pytest
 httpx
+networkx
