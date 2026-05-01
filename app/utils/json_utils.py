@@ -32,8 +32,16 @@ Return ONLY a valid JSON object with this EXACT structure:
   }},
   "constraints": {{
     "hard_constraints": ["string"],
-    "soft_constraints": ["string"]
-  }}
+    "soft_constraints": ["string"],
+    "cannot_work_with_pairs": [["employee name", "employee name"]]
+  }},
+  "edges": [
+    {{
+      "source": "employee name",
+      "target": "employee name",
+      "type": "cannot_work_with"
+    }}
+  ]
 }}
 
 STRICT RULES:
@@ -50,6 +58,8 @@ NORMALIZATION RULES:
 - Times -> preserve explicit time ranges when present, e.g. "09:00-13:00"; otherwise use simple labels (morning, afternoon, evening, night)
 - Skills -> lowercase with underscores instead of spaces (e.g., "front_desk", "system_cert_a")
 - Locations -> preserve apartment/building names from shift sentences, e.g. "apt_a", "apt_b"
+- Cannot-work-together constraints -> include explicit pairs in constraints.cannot_work_with_pairs
+- Relationship edges -> include cannot-work-together relationships in edges using type "cannot_work_with"
 
 IF NO SCHEDULING INFORMATION IS FOUND, RETURN:
 {{
@@ -60,8 +70,10 @@ IF NO SCHEDULING INFORMATION IS FOUND, RETURN:
   }},
   "constraints": {{
     "hard_constraints": [],
-    "soft_constraints": []
-  }}
+    "soft_constraints": [],
+    "cannot_work_with_pairs": []
+  }},
+  "edges": []
 }}
 
 Text:

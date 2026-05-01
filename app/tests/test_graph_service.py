@@ -1,5 +1,7 @@
 from app.services.graph_serializer import serialize_graph
 from app.services.graph_service import GraphService
+from app.services.normalization_service import NormalizationService
+from app.models.extraction import ExtractedConstraints
 
 
 def test_legacy_graph_building() -> None:
@@ -126,6 +128,126 @@ def test_build_conflict_graph_with_normalized_shift_labels() -> None:
     assert "Alice__shift_2" not in graph.nodes
     # Since Bob cannot work with Alice, and they are both scheduled for the same time on shift_1:
     assert graph["Alice__shift_1"]["Bob__shift_1"]["reason"] == "cannot_work_with"
+
+
+def test_normalization_preserves_cannot_work_pairs_and_edges() -> None:
+    extracted = ExtractedConstraints.model_validate(
+        {
+            "job_type": "workforce_schedule",
+            "entities": {
+                "employees": [
+                    {"name": "alice", "skills": ["front desk"], "availability": ["monday"]},
+                    {"name": "bob", "skills": ["front desk"], "availability": ["monday"]},
+                    {"name": "cara", "skills": ["front desk"], "availability": ["monday"]},
+                ],
+                "shifts": [
+                    {
+                        "id": "morning",
+                        "day": "monday",
+                        "time": "morning",
+                        "required_skills": ["front desk"],
+                    }
+                ],
+            },
+            "constraints": {
+                "hard_constraints": [],
+                "soft_constraints": [],
+                "cannot_work_with_pairs": [["alice", "bob"]],
+            },
+            "edges": [
+                {"source": "bob", "target": "cara", "type": "cannot work with"},
+            ],
+        }
+    )
+
+    normalized = NormalizationService().normalize(extracted)
+
+    assert normalized["constraints"]["cannot_work_with_pairs"] == [
+        ["Alice", "Bob"],
+        ["Bob", "Cara"],
+    ]
+    assert normalized["edges"] == [
+        {"source": "Bob", "target": "Cara", "type": "cannot_work_with"}
+    ]
+
+
+def test_build_conflict_graph_uses_extracted_edges() -> None:
+    service = GraphService()
+
+    normalized_data = {
+        "entities": {
+            "employees": [
+                {
+                    "name": "Alice",
+                    "skills": ["front_desk"],
+                    "availability": ["monday_morning"],
+                    "cannot_work_with": [],
+                },
+                {
+                    "name": "Bob",
+                    "skills": ["front_desk"],
+                    "availability": ["monday_morning"],
+                    "cannot_work_with": [],
+                },
+            ],
+            "shifts": [
+                {
+                    "id": "shift_1",
+                    "day": "monday",
+                    "time": "morning",
+                    "shift_label": "morning",
+                    "location": "clinic_a",
+                    "required_skills": ["front_desk"],
+                    "min_staff": 1,
+                    "max_staff": 2,
+                }
+            ],
+        },
+        "constraints": {"hard_constraints": [], "soft_constraints": []},
+        "edges": [
+            {"source": "Alice", "target": "Bob", "type": "cannot_work_with"},
+        ],
+    }
+
+    result = service.build_conflict_graph(normalized_data)
+    graph = result["graph"]
+
+    assert graph["Alice__shift_1"]["Bob__shift_1"]["reason"] == "cannot_work_with"
+
+
+def test_build_conflict_graph_matches_labeled_availability_to_explicit_time() -> None:
+    service = GraphService()
+
+    result = service.build_conflict_graph(
+        {
+            "entities": {
+                "employees": [
+                    {
+                        "name": "Alice",
+                        "skills": ["front_desk"],
+                        "availability": ["monday_morning"],
+                        "cannot_work_with": [],
+                    }
+                ],
+                "shifts": [
+                    {
+                        "id": "shift_1",
+                        "day": "monday",
+                        "time": "09:00-13:00",
+                        "shift_label": "",
+                        "location": "clinic_a",
+                        "required_skills": ["front_desk"],
+                        "min_staff": 1,
+                        "max_staff": 1,
+                    }
+                ],
+            },
+            "constraints": {"hard_constraints": [], "soft_constraints": []},
+        }
+    )
+
+    assert result["node_count"] == 1
+    assert result["nodes"][0]["node_id"] == "Alice__shift_1"
 
 
 def test_serialize_graph() -> None:

@@ -48,10 +48,12 @@ class NormalizationService:
 
         data.setdefault("entities", {})
         data.setdefault("constraints", {})
+        data.setdefault("edges", [])
         data["entities"].setdefault("employees", [])
         data["entities"].setdefault("shifts", [])
         data["constraints"].setdefault("hard_constraints", [])
         data["constraints"].setdefault("soft_constraints", [])
+        data["constraints"].setdefault("cannot_work_with_pairs", [])
 
         data["entities"]["employees"] = self._normalize_employees(
             data["entities"].get("employees", [])
@@ -59,8 +61,9 @@ class NormalizationService:
         data["entities"]["shifts"] = self._normalize_shifts(
             data["entities"].get("shifts", [])
         )
+        data["edges"] = self._normalize_edges(data.get("edges", []))
         data["constraints"] = self._normalize_constraints(
-            data.get("constraints", {})
+            data.get("constraints", {}), data["edges"]
         )
 
         self._validate_consistency(data)
@@ -174,18 +177,101 @@ class NormalizationService:
 
         return deduped
 
-    def _normalize_constraints(self, constraints: dict[str, Any]) -> dict[str, list[str]]:
+    def _normalize_constraints(
+        self,
+        constraints: dict[str, Any],
+        edges: list[dict[str, str]] | None = None,
+    ) -> dict[str, list[Any]]:
         hard = self._dedupe_list(
             [self._normalize_constraint(c) for c in constraints.get("hard_constraints", []) if c]
         )
         soft = self._dedupe_list(
             [self._normalize_constraint(c) for c in constraints.get("soft_constraints", []) if c]
         )
+        cannot_work_with_pairs = self._normalize_person_pairs(
+            constraints.get("cannot_work_with_pairs", [])
+        )
+        cannot_work_with_pairs = self._dedupe_person_pairs(
+            cannot_work_with_pairs + self._cannot_work_with_pairs_from_edges(edges or [])
+        )
 
         return {
             "hard_constraints": hard,
             "soft_constraints": soft,
+            "cannot_work_with_pairs": cannot_work_with_pairs,
         }
+
+    def _normalize_edges(self, edges: list[Any]) -> list[dict[str, str]]:
+        normalized: list[dict[str, str]] = []
+        seen: set[tuple[str, str, str]] = set()
+
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+
+            source = self._normalize_person_name(
+                edge.get("source") or edge.get("from") or edge.get("employee")
+            )
+            target = self._normalize_person_name(
+                edge.get("target") or edge.get("to") or edge.get("coworker")
+            )
+            relation = self._normalize_constraint(
+                edge.get("type") or edge.get("relation") or edge.get("label")
+            )
+
+            if not source or not target or not relation:
+                continue
+
+            key = (source, target, relation)
+            if key in seen:
+                continue
+
+            seen.add(key)
+            normalized.append({"source": source, "target": target, "type": relation})
+
+        return normalized
+
+    def _normalize_person_pairs(self, pairs: list[Any]) -> list[list[str]]:
+        normalized: list[list[str]] = []
+
+        for pair in pairs:
+            if not isinstance(pair, list) or len(pair) != 2:
+                continue
+
+            left = self._normalize_person_name(pair[0])
+            right = self._normalize_person_name(pair[1])
+            if not left or not right:
+                continue
+
+            normalized.append([left, right])
+
+        return self._dedupe_person_pairs(normalized)
+
+    def _cannot_work_with_pairs_from_edges(
+        self, edges: list[dict[str, str]]
+    ) -> list[list[str]]:
+        pairs: list[list[str]] = []
+
+        for edge in edges:
+            if edge["type"] not in {"cannot_work_with", "cannot_work_together"}:
+                continue
+            pairs.append([edge["source"], edge["target"]])
+
+        return pairs
+
+    def _dedupe_person_pairs(self, pairs: list[list[str]]) -> list[list[str]]:
+        seen: set[tuple[str, str]] = set()
+        deduped: list[list[str]] = []
+
+        for left, right in pairs:
+            key = tuple(sorted([left, right]))
+            if key in seen:
+                continue
+
+            seen.add(key)
+            deduped.append([left, right])
+
+        return deduped
 
     def _validate_consistency(self, data: dict[str, Any]) -> None:
         employees = data["entities"]["employees"]
@@ -271,6 +357,24 @@ class NormalizationService:
                 if person not in employee_names:
                     raise NormalizationError(
                         f'Employee "{employee["name"]}" references unknown person "{person}" in cannot_work_with.'
+                    )
+
+        for left, right in data["constraints"].get("cannot_work_with_pairs", []):
+            if left == right:
+                raise NormalizationError(
+                    f'Employee "{left}" cannot be paired with themselves in cannot_work_with_pairs.'
+                )
+            for person in (left, right):
+                if person not in employee_names:
+                    raise NormalizationError(
+                        f'cannot_work_with_pairs references unknown person "{person}".'
+                    )
+
+        for edge in data.get("edges", []):
+            for person in (edge["source"], edge["target"]):
+                if person not in employee_names:
+                    raise NormalizationError(
+                        f'Edge "{edge["type"]}" references unknown person "{person}".'
                     )
 
     def _normalize_day(self, value: Any) -> str:

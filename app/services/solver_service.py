@@ -51,7 +51,7 @@ class SolverService:
         graph: nx.Graph = graph_result["graph"]
 
         if graph.number_of_nodes() == 0:
-            raise SolverServiceError("Conflict graph has no feasible assignment nodes.")
+            raise SolverServiceError(self._no_feasible_nodes_message(normalized_data))
 
         coloring = self.greedy_color(graph, strategy=strategy)
         color_to_time_slot = self.map_colors_to_time_slots(graph, coloring)
@@ -95,7 +95,7 @@ class SolverService:
         graph: nx.Graph = graph_result["graph"]
 
         if graph.number_of_nodes() == 0:
-            raise SolverServiceError("Conflict graph has no feasible assignment nodes.")
+            raise SolverServiceError(self._no_feasible_nodes_message(normalized_data))
 
         candidate_strategies = strategies or [
             "largest_first",
@@ -248,6 +248,54 @@ class SolverService:
             "days": by_day,
             "total_assignments": len(selected_assignments),
         }
+
+    def _no_feasible_nodes_message(self, normalized_data: dict[str, Any]) -> str:
+        employees = normalized_data.get("entities", {}).get("employees", [])
+        shifts = normalized_data.get("entities", {}).get("shifts", [])
+        counts = {
+            "availability_mismatch": 0,
+            "missing_required_skills": 0,
+        }
+        examples: list[str] = []
+
+        for employee in employees:
+            for shift in shifts:
+                reasons = self._candidate_rejection_reasons(employee, shift)
+                for reason in reasons:
+                    counts[reason] += 1
+                if reasons and len(examples) < 3:
+                    examples.append(
+                        f"{employee.get('name', 'unknown')} -> {shift.get('id', 'unknown')}: "
+                        f"{', '.join(reasons)}"
+                    )
+
+        message = "Conflict graph has no feasible assignment nodes."
+        summary = ", ".join(
+            f"{reason}={count}" for reason, count in counts.items() if count
+        )
+        if summary:
+            message += f" Rejection summary: {summary}."
+        if examples:
+            message += f" Examples: {'; '.join(examples)}."
+
+        return message
+
+    def _candidate_rejection_reasons(
+        self,
+        employee: dict[str, Any],
+        shift: dict[str, Any],
+    ) -> list[str]:
+        reasons: list[str] = []
+        availability = set(employee.get("availability", []))
+        if availability and not self.graph_service._matches_availability(shift, availability):
+            reasons.append("availability_mismatch")
+
+        employee_skills = set(employee.get("skills", []))
+        required_skills = set(shift.get("required_skills", []))
+        if not required_skills.issubset(employee_skills):
+            reasons.append("missing_required_skills")
+
+        return reasons
 
     def _first_non_conflicting_candidate(
         self,

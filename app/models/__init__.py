@@ -12,6 +12,7 @@ from .extraction import (
     ShiftExtraction,
     ExtractionEntities,
     ExtractionConstraintSet,
+    ExtractionEdge,
     ExtractedConstraints,
 )
 from .db_models import (
@@ -44,6 +45,7 @@ __all__ = [
     "ShiftExtraction",
     "ExtractionEntities",
     "ExtractionConstraintSet",
+    "ExtractionEdge",
     "ExtractedConstraints",
     "JobDocument",
     "JobStatus",

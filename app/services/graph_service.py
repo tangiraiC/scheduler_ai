@@ -66,6 +66,7 @@ class GraphService:
             employees = normalized_data.get("entities", {}).get("employees", [])
             shifts = normalized_data.get("entities", {}).get("shifts", [])
             constraints = normalized_data.get("constraints", {})
+            edges = normalized_data.get("edges", [])
         except AttributeError as exc:
             raise GraphConstructionError(f"Invalid normalized_data structure: {exc}") from exc
 
@@ -75,7 +76,9 @@ class GraphService:
         graph = nx.Graph()
         constraints = {
             **constraints,
-            "cannot_work_with_pairs": self._cannot_work_with_pairs(employees, constraints),
+            "cannot_work_with_pairs": self._cannot_work_with_pairs(
+                employees, constraints, edges
+            ),
         }
         candidate_nodes: list[AssignmentNode] = []
 
@@ -182,6 +185,7 @@ class GraphService:
         self,
         employees: list[dict[str, Any]],
         constraints: dict[str, Any],
+        edges: list[dict[str, Any]] | None = None,
     ) -> list[list[str]]:
         pairs = list(constraints.get("cannot_work_with_pairs", []))
         for employee in employees:
@@ -190,14 +194,47 @@ class GraphService:
                 continue
             for blocked_name in employee.get("cannot_work_with", []):
                 pairs.append([employee_name, blocked_name])
+
+        for edge in edges or []:
+            if not isinstance(edge, dict):
+                continue
+            if edge.get("type") not in {"cannot_work_with", "cannot_work_together"}:
+                continue
+            source = edge.get("source")
+            target = edge.get("target")
+            if source and target:
+                pairs.append([source, target])
+
         return pairs
 
     def _matches_availability(self, shift: dict[str, Any], availability: set[str]) -> bool:
         day = shift.get("day", "")
         time = shift.get("time", "")
         shift_label = shift.get("shift_label", "")
-        candidates = {day, f"{day}_{time}", f"{day}_{shift_label}"}
-        return bool(availability.intersection(candidate for candidate in candidates if candidate))
+        candidates = {day, time, shift_label, f"{day}_{time}", f"{day}_{shift_label}"}
+        if availability.intersection(candidate for candidate in candidates if candidate):
+            return True
+
+        start_time, end_time = self._shift_time_bounds(shift)
+        if not start_time or not end_time:
+            return False
+
+        for slot in availability:
+            slot_day, slot_label = self._availability_day_and_label(slot)
+            if slot_day and not self._same_day(day, slot_day):
+                continue
+
+            label_start, label_end = self.SHIFT_LABEL_RANGES.get(slot_label, ("", ""))
+            if label_start and self._times_overlap(start_time, end_time, label_start, label_end):
+                return True
+
+        return False
+
+    def _availability_day_and_label(self, value: str) -> tuple[str, str]:
+        if "_" not in value:
+            return "", value
+        day, label = value.split("_", maxsplit=1)
+        return day, label
 
     def _shift_time_bounds(self, shift: dict[str, Any]) -> tuple[str, str]:
         start_time = shift.get("start_time", "")

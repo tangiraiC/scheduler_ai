@@ -36,7 +36,7 @@ class ExtractionService:
 
                 cleaned = self._clean_output(raw_response)
 
-                parsed = json.loads(cleaned)
+                parsed = self._parse_json_object(cleaned)
 
                 validated = ExtractedConstraints.model_validate(parsed)
 
@@ -69,3 +69,15 @@ class ExtractionService:
             text = text[:-3].strip()
 
         return text
+
+    def _parse_json_object(self, text: str) -> Dict[str, Any]:
+        start = text.find("{")
+        if start == -1:
+            raise json.JSONDecodeError("No JSON object found", text, 0)
+
+        decoder = json.JSONDecoder()
+        parsed, _ = decoder.raw_decode(text[start:])
+        if not isinstance(parsed, dict):
+            raise json.JSONDecodeError("Expected JSON object", text, start)
+
+        return parsed

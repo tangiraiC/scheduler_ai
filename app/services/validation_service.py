@@ -373,9 +373,71 @@ class ValidationService:
         day = shift.get("day", "")
         time = shift.get("time", "")
         shift_label = shift.get("shift_label", "")
-        candidates = {day, f"{day}_{time}", f"{day}_{shift_label}"}
+        candidates = {day, time, shift_label, f"{day}_{time}", f"{day}_{shift_label}"}
+        if availability.intersection(candidate for candidate in candidates if candidate):
+            return True
 
-        return bool(availability.intersection(candidate for candidate in candidates if candidate))
+        start_time, end_time = self._shift_time_bounds(shift)
+        if not start_time or not end_time:
+            return False
+
+        for slot in availability:
+            slot_day, slot_label = self._availability_day_and_label(slot)
+            if slot_day and not self._same_day(day, slot_day):
+                continue
+
+            label_start, label_end = self.SHIFT_LABEL_RANGES.get(slot_label, ("", ""))
+            if label_start and self._times_overlap(start_time, end_time, label_start, label_end):
+                return True
+
+        return False
+
+    def _availability_day_and_label(self, value: str) -> tuple[str, str]:
+        if "_" not in value:
+            return "", value
+        day, label = value.split("_", maxsplit=1)
+        return day, label
+
+    def _shift_time_bounds(self, shift: dict[str, Any]) -> tuple[str, str]:
+        start_time = shift.get("start_time", "")
+        end_time = shift.get("end_time", "")
+        if start_time and end_time:
+            return start_time, end_time
+
+        time = shift.get("time", "")
+        parsed = self._parse_time_range(time)
+        if parsed is not None:
+            return parsed
+
+        shift_label = shift.get("shift_label") or time
+        return self.SHIFT_LABEL_RANGES.get(shift_label, ("", ""))
+
+    def _parse_time_range(self, value: str) -> tuple[str, str] | None:
+        if not value:
+            return None
+
+        parts = value.split("-", maxsplit=1)
+        if len(parts) != 2:
+            return None
+
+        start = self._normalize_clock(parts[0])
+        end = self._normalize_clock(parts[1])
+        if not start or not end:
+            return None
+
+        return start, end
+
+    def _normalize_clock(self, value: str) -> str:
+        parts = value.strip().split(":", maxsplit=1)
+        if not parts[0].isdigit():
+            return ""
+
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else 0
+        if hour > 23 or minute > 59:
+            return ""
+
+        return f"{hour:02d}:{minute:02d}"
 
     def _same_day(self, day_a: str | None, day_b: str | None) -> bool:
         return (day_a or "").strip().lower() == (day_b or "").strip().lower()

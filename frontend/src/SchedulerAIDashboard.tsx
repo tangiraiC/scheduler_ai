@@ -24,7 +24,6 @@ import {
 import { Input } from "@/components/ui/input";
 import {
   Select,
-  SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -459,14 +458,12 @@ export default function SchedulerAIDashboard() {
                   <Select value={strategy} onValueChange={setStrategy}>
                     <SelectTrigger className="border-slate-200 bg-white/80 text-slate-700 focus:ring-indigo-500/50 shadow-sm">
                       <SelectValue placeholder="Select heuristic" />
-                    </SelectTrigger>
-                    <SelectContent className="border-slate-100 bg-white text-slate-700">
                       {STRATEGIES.map((item) => (
-                        <SelectItem key={item} value={item} className="focus:bg-indigo-50 focus:text-indigo-700 cursor-pointer">
+                        <SelectItem key={item} value={item}>
                           {item}
                         </SelectItem>
                       ))}
-                    </SelectContent>
+                    </SelectTrigger>
                   </Select>
 
                   <Button
